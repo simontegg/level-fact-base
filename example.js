@@ -58,13 +58,14 @@ db.transact(entities, err => {
       ['?questionId', 'question_identifier', '?identifier'],
       ['?questionId', 'question_ui', '?ui'],
       //
-      ['?id', 'answer_name', '?name'],
       ['?id', 'answer_question_id', '?questionId'],
+
+      ['?id', 'answer_name', '?name'],
       ['?id', 'answer_comment', '?comment']
     ],
-    { name: 'thin' },
+    { questionId },
     // ['id', 'comment'],
-    ['questionId', 'identifier'],
+    ['comment', 'name', 'ui'],
     (err, results) => {
       console.log({err});
       console.log('results');
