@@ -49,7 +49,7 @@ const entities = [
     relationship_object_id: 'd',
   },
   { 
-    $e: 'rel-2',
+    $e: 'rel2',
     relationship_type: 'member_of',
     relationship_subject_id: 'b',
     relationship_object_id: 'd',
@@ -66,19 +66,19 @@ const update = [
   {
     $e: 'a',
     person_name: 'alicia'
+  },
+  {
+    $e: 'rel2',
+    relationship_type: 'member_of',
+    relationship_subject_id: 'b',
+    relationship_object_id: 'd',
+    $retract: true
   }
-  // {
-    // $e: 'rel-2',
-    // relationship_type: 'member_of',
-    // relationship_subject_id: 'b',
-    // relationship_object_id: 'd',
-    // $retract: true
-  // }
 ]
 
 
 db.transact(entities, err => {
-  const past = new Date().getTime()
+  const past = new Date().getTime() - 1
 
   db.transact(update, err => {
     console.log({err});
@@ -89,7 +89,7 @@ db.transact(entities, err => {
         ['?relId', 'relationship_subject_id', '?id'],
         ['?relId', 'relationship_object_id', '?orgId'],
 
-        ['?id', 'person_name', '?name', past]
+        ['?id', 'person_name', '?name']
       ],
       { orgName: 'denmark' },
       // ['id', 'comment'],
@@ -104,7 +104,11 @@ db.transact(entities, err => {
 
           // jsome(all)
           client.indices.delete({ index: '_all' }, err => {
+            console.log({err});
+
+            client.indices.clearCache({ index: '_all' }, err => {
               console.log({err});
+            })
           })
 
         })

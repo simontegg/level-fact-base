@@ -1,7 +1,7 @@
 const pull = require('pull-stream')
 const UUID = require('uuid/v4')
 const bodybuilder = require('bodybuilder')
-const { is, contains, each, filter, keys, sort, map, path, pipe, values } = require('rambda')
+const { all, is, contains, each, filter, keys, sort, map, path, pipe, values } = require('rambda')
 const Big = require('big.js')
 const jsome = require('jsome')
 
@@ -27,6 +27,7 @@ function getMonotonticTimestamp (cache, callback) {
 
 const getSorted = pipe(values, sort((a, b) => b.score - a.score))
 const getHits = path('hits.hits')
+const allRemoved = pipe(values, all(v => v === undefined))
 
 module.exports = function (client, cache) {
   return {
@@ -160,7 +161,16 @@ module.exports = function (client, cache) {
             resultsMap[entity][fact.entity] = {}
           }
           
-          resultsMap[entity][fact.entity][fact.attribute] = fact.value
+          resultsMap[entity][fact.entity][fact.attribute] = fact.operation ? fact.value : undefined
+          // clean up retracted entities
+          if (fact.operation === false && allRemoved(resultsMap[entity][fact.entity])) {
+            delete resultsMap[entity][fact.entity]
+          }
+
+          if (fact.entity === 'rel2') {
+            console.log('LOGG');
+            jsome(resultsMap)
+          }
 
           if (join) {
             // add value to resultsMap for pickup
