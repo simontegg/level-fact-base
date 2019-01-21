@@ -5,6 +5,9 @@ const { is, contains, each, filter, keys, sort, map, path, pipe, values } = requ
 const Big = require('big.js')
 const jsome = require('jsome')
 
+const compileSubQueries = require('./compile-subqueries')
+const getFilter = require('./get-filter')
+
 function getMonotonticTimestamp (cache, callback) {
   // handles 10,000 unique transaction ids per millisecond
   const one = Big(1)
@@ -22,35 +25,8 @@ function getMonotonticTimestamp (cache, callback) {
   })
 }
 
-
-
-
-
 const getSorted = pipe(values, sort((a, b) => b.score - a.score))
 const getHits = path('hits.hits')
-
-function getFilter () {
-  const body = { query: { bool: { filter: { bool: { must: [], should: [] } } } } }
-
-  return {
-
-    must: function (condition) {
-      body.query.bool.filter.bool.must.push(condition)
-    },
-
-    should: function (condition) {
-      body.query.bool.filter.bool.should.push(condition)
-    },
-
-    build: function () {
-      return body
-    }
-  }
-}
-
-
-
-
 
 module.exports = function (client, cache) {
   return {
@@ -90,13 +66,13 @@ module.exports = function (client, cache) {
     },
 
     _subQuery: function (query, resultsMap, callback) {
-      const { entity, type, join } = query
+      const { entity, type, join, timestamp } = query
+      const latestResults = {}
+      const filter = getFilter()
 
       if (!resultsMap[entity]) {
         resultsMap[entity] = {}
       }
-
-      const filter = getFilter()
 
       // fetch entities that match attribute and value
       if (type === 'value') {
@@ -108,14 +84,28 @@ module.exports = function (client, cache) {
         filter.must({ term: { attribute: query.attribute }})
 
         const joinIds = keys(resultsMap[join] || {})
-        joinIds.forEach(joinId => {
-          filter.should({ term: { value: joinId }})
-        })
+        
+        if (joinIds.length > 0) {
+          joinIds.forEach(joinId => {
+            filter.should({ term: { value: joinId }})
+          })
+        } else {
+          const entityIds = keys(resultsMap[entity] || {})
+
+          entityIds.forEach(entityId => {
+            filter.should({ term: { entity: entityId }})
+          })
+        }
+
       }
 
       if (type === 'attribute') {
         const entityIds = keys(resultsMap[entity] || {})
         const attributes = keys(query.attributes)
+
+        if (is(Number, timestamp)) {
+          filter.lte(timestamp)
+        }
         
         // match facts with ANY 
         if (entityIds.length === 0) {
@@ -140,11 +130,32 @@ module.exports = function (client, cache) {
 
       return pull(
         pull.once(filter.build()),
+        pull.map(b => {
+          jsome(b)
+          return b
+        }),
         pull.asyncMap((body, cb) => client.search({ index: 'facts', body }, cb)),
         pull.map(getHits),
         pull.flatten(),
         pull.map(hit => hit._source),
+        pull.filter(fact => {
+          const key = `${fact.entity}|${fact.attribute}`
+
+          if (!latestResults[key]) {
+            latestResults[key] = fact.timestamp
+            return true
+          }
+
+          if (fact.timestamp > latestResults[key]) {
+            latestResults[key] = fact.timestamp
+            return true
+          }
+
+          return false
+        }),
         pull.map(fact => {
+          jsome(fact)
+
           if (!resultsMap[entity][fact.entity]) {
             resultsMap[entity][fact.entity] = {}
           }
@@ -176,6 +187,8 @@ module.exports = function (client, cache) {
 
     query: function (tuples, binding, select, callback) {
       const [queries, attrMap] = compileSubQueries(tuples, binding, select)
+
+      jsome(queries)
       const resultsMap = {}
 
       return pull(
@@ -186,7 +199,7 @@ module.exports = function (client, cache) {
             return callback(err)
           }
 
-          jsome(queries)
+          // jsome(queries)
 
           callback(null, processResults(resultsMap, attrMap))
         })
@@ -195,104 +208,6 @@ module.exports = function (client, cache) {
   }
 }
 
-function compileSubQueries (tuples, binding, select) {
-  const entityMap = {}
-  const attrMap = {}
-  const queries = {}
-
-  pipe(
-    map((tuple, i) => {
-      const entity = tuple[0].replace('?', '')
-      const attribute = tuple[1]
-      const variable = tuple[2].replace('?', '')
-
-      if (!entityMap[entity]) {
-        entityMap[entity] = {}
-      }
-
-      entityMap[entity][attribute] = variable
-
-      if (contains(variable, select)) {
-        attrMap[attribute] = variable
-      }
-//
-      // varMap[variable][attribute] = entity
-      
-      // fetch facts where entity matches binding (and associated attributes)
-      if (binding[entity]) {
-        const key = `e|${entity}`
-        if (!queries[key]) {
-          queries[key] = { 
-            type: 'entity', 
-            entity, 
-            match: binding[entity], 
-            attributes: {},
-            score: 200
-          }
-        }
-      }
-
-      // fetch facts where value and attribute match binding
-      if (typeof binding[variable] !== 'undefined') {
-        queries[`v|${attribute}`] = { 
-          type: 'value', 
-          entity, 
-          attribute, 
-          match: binding[variable], 
-          variable,
-          score: 100
-        }
-      }
-
-      return [entity, attribute, variable]
-    }),
-    map((tuple, i) => {
-      const [entity, attribute, variable] = tuple
-
-      // tuple is a join -> separate prioritised attribute query
-      if (entityMap[variable]) {
-        const aKey = `a|${attribute}`
-        queries[aKey] = { 
-          type: 'join', 
-          entity,
-          attribute,
-          score: 50, 
-          join: variable
-        }
-
-        return tuple
-      }
-
-      // add unbound attributes to any entity query
-      const eKey = `e|${entity}`
-
-      if (queries[eKey] && entityMap[entity][attribute]) {
-        queries[eKey].attributes[attribute] = variable
-        queries[eKey].score += 1
-
-        // otherwise place in a general attributes query
-      } else {
-        if (queries[`v|${attribute}`]) {
-          return
-        }
-
-        const aKey = `a|${entity}`
-
-        if (!queries[aKey]) {
-          queries[aKey] = { type: 'attribute', attributes: {}, entity, score: 0 }
-        }
-
-        queries[aKey].attributes[attribute] = variable
-      }
-      
-      return tuple
-    })
-  )(tuples)
-
-  return [sortQueries(queries), attrMap]
-}
-
-const sortQueries = pipe(values, sort((a, b) => b.score - a.score))
 
 
 function processResults (resultsMap, attrMap) {

@@ -19,74 +19,110 @@ const questionId = '1'
 
 const entities = [
   {
-    $e: questionId,
-    question_identifier: 'staffing',
-    question_ui: 'ui-1'
-  },
-  {
     $e: 'a',
-    answer_question_id: questionId,
-    answer_name: 'thing',
-    answer_comment: 'best'
+    person_name: 'alice',
   },
   {
     $e: 'b',
-    answer_question_id: '2',
-    answer_name: 'thing',
-    answer_comment: 'worst'
+    person_name: 'bob',
   },
   {
     $e: 'c',
-    answer_question_id: '3',
-    answer_name: 'sysy',
-    answer_comment: 'best'
+    person_name: 'charles',
   },
   {
     $e: 'd',
-    answer_question_id: questionId,
-    answer_name: 'thin',
-    answer_comment: 'ccc',
-    answer_section: 'ddd'
+    org_name: 'denmark'
+  },
+  {
+    $e: 'e',
+    org_name: 'estonia'
+  },
+  {
+    $e: 'e',
+    org_name: 'finland'
+  },
+  { 
+    $e: getId(),
+    relationship_type: 'member_of',
+    relationship_subject_id: 'a',
+    relationship_object_id: 'd',
+  },
+  { 
+    $e: 'rel-2',
+    relationship_type: 'member_of',
+    relationship_subject_id: 'b',
+    relationship_object_id: 'd',
+  },
+  { 
+    $e: getId(),
+    relationship_type: 'member_of',
+    relationship_subject_id: 'c',
+    relationship_object_id: 'e',
   }
+]
+
+const update = [
+  {
+    $e: 'a',
+    person_name: 'alicia'
+  }
+  // {
+    // $e: 'rel-2',
+    // relationship_type: 'member_of',
+    // relationship_subject_id: 'b',
+    // relationship_object_id: 'd',
+    // $retract: true
+  // }
 ]
 
 
 db.transact(entities, err => {
-  console.log({err});
-  db.query(
-    [
-      ['?questionId', 'question_identifier', '?identifier'],
-      ['?questionId', 'question_ui', '?ui'],
-      //
-      ['?id', 'answer_question_id', '?questionId'],
+  const past = new Date().getTime()
 
-      ['?id', 'answer_name', '?name'],
-      ['?id', 'answer_comment', '?comment']
-    ],
-    { questionId },
-    // ['id', 'comment'],
-    ['comment', 'name', 'ui'],
-    (err, results) => {
-      console.log({err});
-      console.log('results');
-      jsome(results)
-//
-      client.msearch({ body: [{}, { query: { match_all: {} } }] }, (err, all) => {
+  db.transact(update, err => {
+    console.log({err});
+    db.query(
+      [
+        ['?orgId', 'org_name', '?orgName'],
+        //
+        ['?relId', 'relationship_subject_id', '?id'],
+        ['?relId', 'relationship_object_id', '?orgId'],
+
+        ['?id', 'person_name', '?name', past]
+      ],
+      { orgName: 'denmark' },
+      // ['id', 'comment'],
+      ['name'],
+      (err, results) => {
         console.log({err});
+        console.log('results');
+        jsome(results)
+  //
+        client.msearch({ body: [{}, { query: { match_all: {} } }] }, (err, all) => {
+          console.log({err});
 
-        // jsome(all)
-        client.indices.delete({ index: '_all' }, err => {
-            console.log({err});
+          // jsome(all)
+          client.indices.delete({ index: '_all' }, err => {
+              console.log({err});
+          })
+
         })
 
-      })
 
 
 
 
+      }
+    )
 
-    }
-  )
+
+
+
+})
+
+
+  
 
 
 })
