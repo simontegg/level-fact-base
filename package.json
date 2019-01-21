@@ -41,6 +41,8 @@
     "rambda": "^2.3.0",
     "redis": "^2.8.0",
     "redis-mock": "^0.42.0",
+    "superagent": "^4.1.0",
+    "superagent-absolute": "^1.0.1",
     "uuid": "^3.3.2"
   },
   "devDependencies": {

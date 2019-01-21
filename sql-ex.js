@@ -4,6 +4,13 @@ const redis = require('redis')
 const factory = require('./index.js')
 const UUID = require('uuid/v4')
 const jsome = require('jsome')
+const superagent = require('superagent')
+const absolute =require('superagent-absolute')
+
+const agent = superagent.agent()
+const request = absolute(agent)('http://localhost:9200')
+
+
 
 
 const client = require('./elastic.js')
@@ -20,8 +27,7 @@ const questionId = '1'
 const entities = [
   {
     $e: questionId,
-    question_identifier: 'staffing',
-    question_ui: 'ui-1'
+    question_identifier: 'staffing'
   },
   {
     $e: 'a',
@@ -50,42 +56,39 @@ const entities = [
   }
 ]
 
+const query = `
+  SELECT *
+    FROM facts AS f
+   WHERE f.attribute = 'answer_question_id'
+     AND f.value = ${questionId}
+`
 
-db.transact(entities, err => {
-  console.log({err});
-  db.query(
-    [
-      ['?questionId', 'question_identifier', '?identifier'],
-      ['?questionId', 'question_ui', '?ui'],
-      //
-      ['?id', 'answer_name', '?name'],
-      ['?id', 'answer_question_id', '?questionId'],
-      ['?id', 'answer_comment', '?comment']
-    ],
-    { name: 'thin' },
-    // ['id', 'comment'],
-    ['questionId', 'identifier'],
-    (err, results) => {
-      console.log({err});
-      console.log('results');
-      jsome(results)
-//
-      client.msearch({ body: [{}, { query: { match_all: {} } }] }, (err, all) => {
-        console.log({err});
+db.transact(entities, async err => {
 
-        // jsome(all)
-        client.indices.delete({ index: '_all' }, err => {
-            console.log({err});
-        })
+  try {
+    const res = await request
+      .post('/_xpack/sql?format=json')
+      .send({ query })
 
-      })
+    // jsome(res)
+    
+    jsome(JSON.parse(res.text))
+  } catch (err) {
+    console.log({err});
+  }
+
+
+    
+
+
+
+  await client.indices.delete({ index: '_all' })
 
 
 
 
 
-    }
-  )
+
 
 
 })

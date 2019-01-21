@@ -1,21 +1,9 @@
 const pull = require('pull-stream')
 const UUID = require('uuid/v4')
 const bodybuilder = require('bodybuilder')
-const { contains, each, keys, sort, map, path, pipe, values } = require('rambda')
+const { contains, each, filter, keys, sort, map, path, pipe, values } = require('rambda')
 const Big = require('big.js')
 const jsome = require('jsome')
-
-function escapeVar (elm) {
-  return typeof elm === 'string'
-    ? elm
-      .replace(/^\\/, '\\\\')
-      .replace(/^\?/, '\\?')
-    : elm
-}
-
-function isVar (val) {
-  return /^\?/.test(val)
-}
 
 function getMonotonticTimestamp (cache, callback) {
   // handles 10,000 unique transaction ids per millisecond
@@ -34,43 +22,6 @@ function getMonotonticTimestamp (cache, callback) {
   })
 }
 
-function getEntityMap (tuples, binding, select) {
-  const entityMap = {}
-
-  for (let i = 0; i < tuples.length + 1; i++) {
-    const tuple = tuples[i]
-    let score = 0
-    let typeId
-    let attr
-
-    for (let j = 0; j < tuple.length; j++) {
-      const variable = tuple[j].replace('?', '')
-
-      if (j === 0) {
-        typeId = variable
-      }
-
-      if (j === 1) {
-        attr = variable
-      }
-
-      if (!entityMap[typeId]) {
-        entityMap[typeId] = { typeId, binding: {}, as: {}, score: 0 }
-      }
-
-      if (binding[variable]) {
-        entityMap[typeId].binding[j === 0 ? typeId : attr] = binding[variable]
-        entityMap[typeId].score += variable === typeId ? 2 : 1
-      }
-
-      if (j === 2 && contains(variable, select)) {
-        entityMap[typeId].as[attr] = variable
-      }
-    }
-  }
-
-  return entityMap
-}
 
 
 
@@ -96,6 +47,10 @@ function getFilter () {
     }
   }
 }
+
+
+
+
 
 module.exports = function (client, cache) {
   return {
@@ -134,50 +89,51 @@ module.exports = function (client, cache) {
       })
     },
 
-    _queryTuple: function (resultsMap, tuple, binding, callback) {
-      const typeId  = tuple[0].replace('?', '')
-      const attr    = tuple[1]
-      const select  = tuple[2].replace('?', '')
+    _queryTuple: function (query, binding, resultsMap, callback) {
+      const { entity, type } = query
 
-      if (!resultsMap[typeId]) {
-        resultsMap[typeId] = {}
+      if (!resultsMap[entity]) {
+        resultsMap[entity] = {}
       }
 
-      // if (!resultsMap[attr]) {
-        // resultsMap[attr] = {}
-      // }
-
-      // const body = bodybuilder()
-      // const body = { query: { bool: { must: [], should: [] } } }
       const filter = getFilter()
-      const entityIds = keys(resultsMap[typeId])
-      const value = binding[select]
-      const joins = resultsMap[select] ? keys(resultsMap[select]) : []
-      
-      // restrict to existing results entities ({ attr: 'val1' AND attr2: 'val2' })
-      if (entityIds.length > 0) {
-        entityIds.forEach(entityId => {
-          filter.should({ term: { entity: entityId } })
-        })
+
+      // fetch entities that match attribute and value
+      if (type === 'value') {
+        filter.must({ term: { attribute: query.attribute }})
+        filter.must({ term: { value: query.match }})
       }
 
-      filter.must({ term: { attribute: attr }})
-      // query for matching bound value
-      if (value) {
-        filter.must({ term: { value } })
-      }
+      // fetch match
+      if (type === 'attribute') {
+        const entityIds = keys(resultsMap[entity])
+        const attributes = keys(query.attributes)
+        
+        // match facts with ANY 
+        if (entityIds.length === 0) {
+          attributes.forEach(attribute => filter.should({ term: { attribute } }))
+        } else {
+          const entityCondition = { bool: { should: [] } }
+          const attrCondition   = { bool: { should: [] } }
 
-      // query for joined entity
-      if (joins.length > 0) {
-        joins.forEach(entityId => {
-          filter.should({ term: { value: entityId }})
-        })
+          entityIds.forEach(entityId => {
+            entityCondition.bool.should.push({ term: { entity: entityId } })
+          })
+
+          attributes.forEach(attribute => {
+            attrCondition.bool.should.push({ term: { attribute } })
+          })
+          
+          // facts must match ANY of entities AND ANY of attributes
+          filter.must(entityCondition)
+          filter.must(attrCondition)
+        }
+
       }
 
       const built = filter.build()
 
-      console.log('TYPEIDS');
-      jsome(entityIds)
+      jsome(resultsMap)
       console.log('BBB');
       jsome(built)
 
@@ -188,12 +144,27 @@ module.exports = function (client, cache) {
         pull.flatten(),
         pull.map(hit => hit._source),
         pull.map(fact => {
-          if (!resultsMap[typeId][fact.entity]) {
-            resultsMap[typeId][fact.entity] = {}
+          if (!resultsMap[entity][fact.entity]) {
+            resultsMap[entity][fact.entity] = {}
           }
+          
+          resultsMap[entity][fact.entity][fact.attribute] = fact.value
 
-          resultsMap[typeId][fact.entity][fact.attribute] = fact.value
-          // resultsMap[fact.attribute][fact.entity] = fact.value
+          const joinVar = query.joins[fact.attribute]
+
+          if (joinVar) {
+            if (!resultsMap[joinVar]) {
+              resultsMap[joinVar] = {}
+            }
+            
+            if (!resultsMap[joinVar][fact.value]) {
+              resultsMap[joinVar][fact.value] = {}
+            }
+
+            resultsMap[joinVar][fact.value][fact.attribute] = fact.entity
+          }
+          
+          jsome(fact)
           return fact
         }),
         pull.collect(callback)
@@ -201,68 +172,146 @@ module.exports = function (client, cache) {
     },
 
     query: function (tuples, binding, select, callback) {
-      // const entityMap = getEntityMap(tuples, binding, select)
-      const sorted = scoreAndSort(tuples, binding)
-      const unbound = []
-
+      const queries = compileSubQueries(tuples, binding)
+      jsome(queries)
       const resultsMap = {}
-      
-      console.log('SORTED');
-      jsome(sorted)
 
       return pull(
-        pull.values(sorted),
-        // pull.filter(({ tuple, score }) => {
-          // if (score === 0) {
-            // unbound.push(tuple)
-            // return false
-          // }
-//
-          // return true
-        // }),
-        pull.asyncMap(({ tuple }, cb) => this._queryTuple(resultsMap, tuple, binding, cb)),
+        pull.values(queries),
+        pull.asyncMap((query, cb) => this._queryTuple(query, binding, resultsMap, cb)),
         pull.collect((err, results) => {
           if (err) {
             return callback(err)
           }
 
-          callback(null, [resultsMap, results, unbound])
+          jsome(queries)
+
+          callback(null, results)
+
+          // callback(null, processResults(resultsMap, attrMap))
         })
       )
     }
   }
 }
 
-function scoreAndSort (tuples, binding) {
-  const scoreMap = {}
-  const run = pipe(
+function compileSubQueries (tuples, binding) {
+  const entityMap = {}
+  const varMap = {}
+  const queries = {}
+
+  pipe(
     map((tuple, i) => {
-      scoreMap[i] = 0
+      const entity = tuple[0].replace('?', '')
+      const attribute = tuple[1]
+      const variable = tuple[2].replace('?', '')
 
-      for (let j = 0; j < tuples.length + 1; j++) {
-        const variable = tuple[j].replace('?', '')
+      if (!entityMap[entity]) {
+        entityMap[entity] = {}
+      }
 
-        if (binding[variable]) {
-          scoreMap[i] += j === 0 ? 2 : 1
+      entityMap[entity][attribute] = variable
+
+      if (!varMap[variable]) {
+        varMap[variable] = {}
+      }
+
+      varMap[variable][attribute] = entity
+      
+      // fetch facts where entity matches binding (and associated attributes)
+      if (binding[entity]) {
+        const key = `e|${entity}`
+        if (!queries[key]) {
+          queries[key] = { 
+            type: 'entity', 
+            entity, 
+            match: binding[entity], 
+            attributes: {},
+            score: 200,
+            joins: {}
+          }
         }
       }
 
-      return tuple
-    }),
-    map((tuple, i) => ({ tuple, score: scoreMap[i] })),
-    sort((a, b) => b.score - a.score)
-  )
+      // fetch facts where value and attribute match binding
+      if (typeof binding[variable] !== 'undefined') {
+        queries[`v|${attribute}`] = { 
+          type: 'value', 
+          entity, 
+          attribute, 
+          match: binding[variable], 
+          variable,
+          score: 100,
+          joins: {}
+        }
+      }
 
-  return run(tuples)
+      return [entity, attribute, variable]
+    }),
+    map((tuple, i) => {
+      const [entity, attribute, variable] = tuple
+      const eKey = `e|${entity}`
+
+      // add unbound attributes to head query
+      if (queries[eKey] && entityMap[entity][attribute]) {
+        queries[eKey].attributes[attribute] = variable
+        queries[eKey].score += 1
+        
+        if (entityMap[variable]) {
+          queries[ekey].joins[attribute] = variable
+        }
+
+      } else {
+        const aKey = `a|${entity}`
+
+        if (!queries[aKey]) {
+          queries[aKey] = { type: 'attribute', attributes: {}, entity, score: 0, joins: {} }
+        }
+
+        if (!queries[`v|${attribute}`]) {
+          queries[aKey].attributes[attribute] = variable
+        }
+
+        // contains a join -> promote score
+        if (entityMap[variable]) {
+          queries[aKey].score += 1
+          queries[aKey].joins[attribute] = variable
+        }
+
+
+      }
+      
+      return tuple
+    })
+  )(tuples)
+
+  return sortQueries(queries)
 }
 
+const sortQueries = pipe(values, sort((a, b) => b.score - a.score))
 
-function processResults (resulltsMap, entityMap) {
+
+function processResults (resultsMap, attrMap) {
   const results = []
 
-  // keys(resulltsMap).forEach( => {
-//
-  // })
-  
+  keys(resultsMap).forEach(entityType => {
+    keys(resultsMap[entityType]).forEach(entityId => {
+      const entity = { [entityType]: entityId }
 
+      keys(resultsMap[entityType][entityId]).forEach(attr => {
+        const select = attrMap[attr]
+
+        if (select) {
+          entity[select] = resultsMap[entityType][entityId][attr]
+        }
+      })
+
+      results.push(entity)
+    })
+  })
+
+  return results
 }
+
+
+
