@@ -147,6 +147,9 @@ function compileSubQueries (tuples, binding, select) {
     })
   )(tuples)
 
+  console.log('varMap');
+  jsome(varMap)
+
   return [sortQueries(queries), attrMap]
 }
 

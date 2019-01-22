@@ -32,7 +32,8 @@ const entities = [
   },
   {
     $e: 'd',
-    org_name: 'denmark'
+    org_name: 'denmark',
+    org_status: 'good'
   },
   {
     $e: 'e',
@@ -45,20 +46,20 @@ const entities = [
   { 
     $e: getId(),
     relationship_type: 'member_of',
-    relationship_subject_id: 'a',
-    relationship_object_id: 'd',
+    relationship_subjectId: 'a',
+    relationship_objectId: 'd',
   },
   { 
     $e: 'rel2',
     relationship_type: 'member_of',
-    relationship_subject_id: 'b',
-    relationship_object_id: 'd',
+    relationship_subjectId: 'b',
+    relationship_objectId: 'd',
   },
   { 
     $e: getId(),
     relationship_type: 'member_of',
-    relationship_subject_id: 'c',
-    relationship_object_id: 'e',
+    relationship_subjectId: 'c',
+    relationship_objectId: 'e',
   }
 ]
 
@@ -70,9 +71,13 @@ const update = [
   {
     $e: 'rel2',
     relationship_type: 'member_of',
-    relationship_subject_id: 'b',
-    relationship_object_id: 'd',
+    relationship_subjectId: 'b',
+    relationship_objectId: 'd',
     $retract: true
+  },
+  {
+    $e: 'd',
+    org_status: 'bad'
   }
 ]
 
@@ -85,15 +90,16 @@ db.transact(entities, err => {
     db.query(
       [
         ['?orgId', 'org_name', '?orgName'],
+        ['?orgId', 'org_status', '?status', past], 
         //
-        ['?relId', 'relationship_subject_id', '?id'],
-        ['?relId', 'relationship_object_id', '?orgId'],
+        ['?relId', 'relationship_objectId', '?orgId'],
+        ['?relId', 'relationship_subjectId', '?id'],
 
         ['?id', 'person_name', '?name']
       ],
       { orgName: 'denmark' },
       // ['id', 'comment'],
-      ['name'],
+      ['name', 'status'],
       (err, results) => {
         console.log({err});
         console.log('results');

@@ -29,6 +29,10 @@ const getSorted = pipe(values, sort((a, b) => b.score - a.score))
 const getHits = path('hits.hits')
 const allRemoved = pipe(values, all(v => v === undefined))
 
+// const getEntityType = pipe(
+  // split
+// )
+
 module.exports = function (client, cache) {
   return {
     transact: function (entities, callback) {
@@ -38,31 +42,65 @@ module.exports = function (client, cache) {
           return callback(err)
         }
 
-        const facts = []
+        return pull(
+          pull.values(entities),
+          // pull.map(entity => {
+            // if (entity.$seed) {
+              // delete entity.$seed
+              // return entity
+            // }
+//
+            // const type = getEntityType(entity)
+            // const createdAt = `${type}_createdAt`
+//
+            // if (entity.create && !entity[createdAt]) {
+              // entity[createdAt] = now
+              // delete entity.create
+            // }
+//
+            // const updatedAt = `${type}_updatedAt`
+//
+            // if (!entity[updatedAt]) {
+              // entity[updatedAt] = now
+            // }
+//
+            // return entity
+          // }),
+          pull.map(entity => {
+            const facts = []  
 
-        for (let i = 0; i < entities.length; i++) {
-          const entity = entities[i]
-          
-          keys(entity).forEach(attr => {
-            if (attr === '$e' || attr === '$retract') {
-              return
+            keys(entity).forEach(attr => {
+              if (attr === '$e' || attr === '$retract') {
+                return
+              }
+
+              facts.push(
+                { index: { _index: 'facts', _type: "_doc", _id: UUID() } }
+              )
+              
+              facts.push({ 
+                entity: entity.$e,
+                attribute: attr, 
+                value: entity[attr], 
+                timestamp, 
+                operation: !entity.$retract 
+              })
+            })
+
+            return facts
+          }),
+          pull.flatten(),
+          pull.collect((err, facts) => {
+            if (err) {
+              return callback(err)
             }
 
-            facts.push(
-              { index: { _index: 'facts', _type: "_doc", _id: UUID() } }
-            )
-            
-            facts.push({ 
-              entity: entity.$e,
-              attribute: attr, 
-              value: entity[attr], 
-              timestamp, 
-              operation: !entity.$retract 
-            })
-          })
-        }
+            jsome(facts)
 
-        client.bulk({ body: facts, refresh: 'true' }, callback)
+            client.bulk({ body: facts, refresh: 'true' }, callback)
+          })
+        )
+
       })
     },
 
@@ -77,40 +115,34 @@ module.exports = function (client, cache) {
 
       // fetch entities that match attribute and value
       if (type === 'value') {
-        filter.must({ term: { attribute: query.attribute }})
-        filter.must({ term: { value: query.match }})
+        filter.must({ term: { 'attribute.keyword': query.attribute }})
+        filter.must({ term: { 'value.keyword': query.match }})
       }
 
       if (type === 'join') {
-        filter.must({ term: { attribute: query.attribute }})
+        filter.must({ term: { 'attribute.keyword': query.attribute }})
 
         const joinIds = keys(resultsMap[join] || {})
         
         if (joinIds.length > 0) {
-          joinIds.forEach(joinId => {
-            filter.should({ term: { value: joinId }})
-          })
+          joinIds.forEach(joinId => filter.should({ term: { 'value.keyword': joinId }}))
         } else {
-          const entityIds = keys(resultsMap[entity] || {})
-
-          entityIds.forEach(entityId => {
-            filter.should({ term: { entity: entityId }})
-          })
+          keys(resultsMap[entity] || {})
+            .forEach(entityId => {
+              filter.should({ term: { entity: entityId }})
+            })
         }
-
       }
 
       if (type === 'attribute') {
         const entityIds = keys(resultsMap[entity] || {})
         const attributes = keys(query.attributes)
-
-        if (is(Number, timestamp)) {
-          filter.lte(timestamp)
-        }
         
         // match facts with ANY 
         if (entityIds.length === 0) {
-          attributes.forEach(attribute => filter.should({ term: { attribute } }))
+          attributes.forEach(attribute => {
+            filter.should({ term: { 'attribute.keyword': attribute } })
+          })
         } else {
           const entityCondition = { bool: { should: [] } }
           const attrCondition   = { bool: { should: [] } }
@@ -120,13 +152,17 @@ module.exports = function (client, cache) {
           })
           
           attributes.forEach(attribute => {
-            attrCondition.bool.should.push({ term: { attribute } })
+            attrCondition.bool.should.push({ term: { 'attribute.keyword': attribute } })
           })
           
           // facts must match ANY of entities AND ANY of attributes
           filter.must(entityCondition)
           filter.must(attrCondition)
         }
+      }
+
+      if (is(Number, timestamp)) {
+        filter.lte(timestamp)
       }
 
       return pull(
@@ -162,18 +198,14 @@ module.exports = function (client, cache) {
           }
           
           resultsMap[entity][fact.entity][fact.attribute] = fact.operation ? fact.value : undefined
+
           // clean up retracted entities
           if (fact.operation === false && allRemoved(resultsMap[entity][fact.entity])) {
             delete resultsMap[entity][fact.entity]
           }
 
-          if (fact.entity === 'rel2') {
-            console.log('LOGG');
-            jsome(resultsMap)
-          }
-
           if (join) {
-            // add value to resultsMap for pickup
+            // add entity value to resultsMap for pickup by subsequent queries
             if (!resultsMap[join]) {
               resultsMap[join] = {}
             }
