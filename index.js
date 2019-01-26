@@ -7,6 +7,7 @@ const jsome = require('jsome')
 
 const compileSubQueries = require('./compile-subqueries')
 const getFilter = require('./get-filter')
+const getEntityType = require('./get-entity-type')
 
 function getMonotonticTimestamp (cache, callback) {
   // handles 10,000 unique transaction ids per millisecond
@@ -44,28 +45,29 @@ module.exports = function (client, cache) {
 
         return pull(
           pull.values(entities),
-          // pull.map(entity => {
-            // if (entity.$seed) {
-              // delete entity.$seed
-              // return entity
-            // }
-//
-            // const type = getEntityType(entity)
-            // const createdAt = `${type}_createdAt`
-//
-            // if (entity.create && !entity[createdAt]) {
-              // entity[createdAt] = now
-              // delete entity.create
-            // }
-//
-            // const updatedAt = `${type}_updatedAt`
-//
-            // if (!entity[updatedAt]) {
-              // entity[updatedAt] = now
-            // }
-//
-            // return entity
-          // }),
+          pull.map(entity => {
+            if (entity.$seed) {
+              delete entity.$seed
+              return entity
+            }
+
+            const type = getEntityType(entity)
+            const createdAt = `${type}_createdAt`
+            const now = new Date(timestamp).toISOString()
+
+            if (entity.create && !entity[createdAt]) {
+              entity[createdAt] = new Date()
+              delete entity.create
+            }
+
+            const updatedAt = `${type}_updatedAt`
+
+            if (!entity[updatedAt]) {
+              entity[updatedAt] = now
+            }
+
+            return entity
+          }),
           pull.map(entity => {
             const facts = []  
 
@@ -167,10 +169,10 @@ module.exports = function (client, cache) {
 
       return pull(
         pull.once(filter.build()),
-        pull.map(b => {
-          jsome(b)
-          return b
-        }),
+        // pull.map(b => {
+          // jsome(b)
+          // return b
+        // }),
         pull.asyncMap((body, cb) => client.search({ index: 'facts', body }, cb)),
         pull.map(getHits),
         pull.flatten(),
@@ -191,7 +193,7 @@ module.exports = function (client, cache) {
           return false
         }),
         pull.map(fact => {
-          jsome(fact)
+          // jsome(fact)
 
           if (!resultsMap[entity][fact.entity]) {
             resultsMap[entity][fact.entity] = {}

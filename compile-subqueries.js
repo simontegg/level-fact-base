@@ -1,6 +1,6 @@
 const pull = require('pull-stream')
 const UUID = require('uuid/v4')
-const { is, contains, each, filter, keys, sort, map, path, pipe, values } = require('rambda')
+const { all, is, concat, contains, each, filter, find, keys, sort, map, path, pipe, reduce, values } = require('rambda')
 const Big = require('big.js')
 const jsome = require('jsome')
 
@@ -28,6 +28,9 @@ function compileSubQueries (tuples, binding, select) {
   const attrMap       = {}
   const queries       = {}
   const boundQueries  = {}
+  const indexMap      = {}
+
+  const tupleMap = new Map()
 
   pipe(
     map((tuple, i) => {
@@ -35,6 +38,20 @@ function compileSubQueries (tuples, binding, select) {
       const attribute = tuple[1]
       const variable  = tuple[2].replace('?', '')
       const timestamp = is(String, tuple[3]) ? tuple[3].replace('?', '') : tuple[3]
+
+      const eKey = `e|${entity}`
+      const aKey = `a|${attribute}`
+      const vKey = `v|${variable}`
+      const tKey = `t|${timestamp}`
+
+      if (indexMap[eKey] === undefined) {
+        indexMap[eKey] = []
+      }
+
+      indexMap[eKey].push(i)
+      indexMap[aKey] = i
+      indexMap[vKey] = i
+      indexMap[tKey] = i
 
       // keep maps of entities, variables and select
       if (!entityMap[entity]) {
@@ -74,7 +91,7 @@ function compileSubQueries (tuples, binding, select) {
       if (typeof binding[variable] !== 'undefined') {
         boundQueries[entity] = true
 
-        queries[`v|${attribute}`] = { 
+        queries[`v|${attribute}`] = {
           type: 'value', 
           entity, 
           attribute, 
@@ -89,6 +106,40 @@ function compileSubQueries (tuples, binding, select) {
     }),
     map((tuple, i) => {
       const [entity, attribute, variable, timestamp] = tuple
+      let joins = []
+      
+      const evKey  = `e|${variable}`
+      const veKey  = `v|${entity}`
+      const tvKey  = `t|${variable}`
+      const vtKey  = `v|${timestamp}`
+
+      if (indexMap[evKey] !== undefined) {
+        joins = joins.concat(indexMap[evKey])  
+      }
+
+      if (indexMap[veKey] !== undefined) {
+        joins.push(indexMap[veKey])
+      }
+
+      if (indexMap[tvKey] !== undefined) {
+        joins.push(indexMap[tvKey])
+      }
+
+      if (indexMap[vtKey] !== undefined) {
+        joins.push(indexMap[tvKey])
+      }
+      
+      const boundEntity = binding[entity] 
+      const boundValue = binding[variable]
+      const boundTimestamp = binding[timestamp]
+      
+      const e   = `e|${entity}`   
+      const peers = filter(j => j !== i, indexMap[e])
+
+      tupleMap.set(
+        i, 
+        { joins, peers, boundEntity, boundValue, boundTimestamp, i }
+      )
 
       // tuple is a join -> separate prioritised attribute query
       if (entityMap[variable]) {
@@ -99,7 +150,9 @@ function compileSubQueries (tuples, binding, select) {
           entity,
           attribute,
           score: boundQueries[variable] ? 70 : 50, 
-          join: variable
+          join: variable,
+          timestamp,
+          dependsOn: `e|${variable}`
         }
 
         return tuple
@@ -144,11 +197,125 @@ function compileSubQueries (tuples, binding, select) {
       }
       
       return tuple
-    })
+    }),
   )(tuples)
 
-  console.log('varMap');
-  jsome(varMap)
+  let head
+  for (let join of tupleMap.values()) {
+    if (join.boundEntity || join.boundValue) {
+      head = join
+      continue
+    }
+  }
+
+  let maxPeers = 0
+  for (let join of tupleMap.values()) {
+    if (join.peers.length > maxPeers) {
+      head = join
+      maxPeers = join.peers.length
+      continue
+    }
+  }
+
+
+
+  const qs = buildQueries(tupleMap, head, [])
+  // if ()
+//
+  function buildQueries (tupleMap, node, queries, type) {
+    const { i, peers, joins } = node
+    let query
+    let next
+
+    console.log({node, type});
+
+    if (node.boundValue) {
+      query = {
+        type: 'entities-by-attribute-value',
+        attribute: tuples[i][1],
+        value: node.boundValue
+      }
+
+      queries.push(query)
+
+      // fetch additional attributes
+      if (peers.length > 0) {
+        next = tupleMap.get(peers[0])
+        next.peers = filter(j => j !== i, next.peers)
+        return buildQueries(tupleMap, next, queries, 'attributes-from-entities')
+      }
+
+      // fetch join
+      if (joins.length > 0) {
+        next = tupleMap.get(joins[0])
+        next.joins = filter(j => j !== i, next.joins)
+        return buildQueries(tupleMap, next, queries, 'entities-by-joined-value')
+      }
+
+      return queries
+    }
+    
+    // if (node.boundEntity) {
+      // query = {
+        // type: 'attributes-by-entity',
+        // entity: tuples[i][0],
+        // attributes: map(index => tuples[index][1], concat([i], peers)),
+        // match: node.boundEntity
+      // }
+//
+      // peers.forEach(j => tupleMap.delete(j))
+      // next = tupleMap.get(joins[0])
+//
+    // }
+//
+    if (type === 'entities-by-joined-value') {
+      query = {
+        type,
+        entity: tuples[i][0],
+        attribute: tuples[i][1],
+        join: tuples[i][2]
+      }
+
+      queries.push(query)
+
+      if (peers.length > 0) {
+        next = tupleMap.get(peers[0])
+        next.peers = filter(j => j !== i, next.peers)
+        return buildQueries(tupleMap, next, queries, 'attributes-from-entities')
+      }
+
+      return queries
+    }
+    
+    if (type === 'attributes-from-entities') {
+      query = { 
+        type,
+        entity: tuples[i][0], 
+        attributes: map(index => tuples[index][1], concat([i], peers))
+      }
+      
+      queries.push(query)
+      // peers.forEach(j => tupleMap.delete(j))
+
+      if (joins.length > 0) {
+        next = tupleMap.get(joins[0])
+        next.joins = []
+        return buildQueries(tupleMap, next, queries, 'entities-by-joined-value')
+      }
+    }
+
+    return queries
+  }
+
+
+
+  jsome(qs)
+  console.log(head)
+  tupleMap.forEach((val, i) => {
+    console.log(i);
+    jsome(val)
+  })
+
 
   return [sortQueries(queries), attrMap]
 }
