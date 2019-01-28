@@ -1,7 +1,9 @@
 const UUID = require('uuid/v4')
-const { all, is, concat, contains, each, filter, find, groupBy, keys, sort, map, path, pipe, reduce, values } = require('rambda')
+const { all, append, is, concat, contains, each, equals, filter, find, groupBy, keys, sort, map, path, pipe, reduce, values } = require('rambda')
 const Big = require('big.js')
 const jsome = require('jsome')
+
+const traverse = require('traverse')
 
 module.exports = compileSubQueries
 
@@ -30,6 +32,7 @@ function clear (tuple) {
 }
 
 function getEntry (grouped, binding) {
+  let maxVars = 0
   let entry
 
   keys(grouped).some(entity => {
@@ -44,6 +47,14 @@ function getEntry (grouped, binding) {
         return true
       }
     })
+
+    // no binding -> entry is entity with most variables
+    const varsCount = keys(grouped[entity].variables).length
+
+    if (varsCount > maxVar) {
+      maxVars = varsCount
+      entry = { entity }
+    }
   })
 
   return entry
@@ -65,97 +76,138 @@ function group (tuples) {
   return grouped
 }
 
-function getJoins (grouped) {
-  const joins = {}
+function joinOrder (grouped, start) {
+  const memo = []
+  const ordered = [[start, []]]
+  const done = {}
+  const entities = keys(grouped).sort((a, b) => a === start ? -1 : 1)
 
-  keys(grouped).forEach(entity1 => {
-    keys(grouped).forEach(entity2 => {
-      if (grouped[entity2].variables[entity1]) {
-        joins[entity1] = entity2
+  while (entities.length > 0) {
+    const from = entities.shift()
+
+    // iterate throught entities
+    keys(grouped).forEach(entity => {
+
+      // ignore own variables
+      if (entity !== from) {
+
+        // iterate through an entity's variables
+        keys(grouped[entity].variables).forEach(variable => {
+
+          // variable is an entity
+          if (!done[entity] && from === variable) {
+            traverse(ordered).forEach(function (x) {
+              // prior entity exists in ordered results
+              if (x === from) {
+                done[x] = true
+                // find path for subordinate entities
+                let path = this.path.slice(0)
+                path.splice(this.path.length - 1, 1, '1')
+
+                const subordinates = traverse(ordered).get(path)
+                const update = subordinates.slice(0)
+                update.push([entity, []])
+                traverse(ordered).set(path, update)
+              }
+            })
+          }
+
+          // 
+          if (!done[variable] && grouped[variable]) {
+            traverse(ordered).forEach(function (x) {
+              if (!done[x] && x === entity) {
+                done[variable] = true
+                done[x] = true
+
+                let path = this.path.slice(0)
+                path.splice(this.path.length - 1, 1, '1')
+
+                const subordinates = traverse(ordered).get(path)
+                const update = subordinates.slice(0)
+                update.push([variable, []])
+                traverse(ordered).set(path, update)
+              }
+            })
+          }
+        })
       }
     })
-  })
 
-  return joins
-}
-
-function sortEntities (entry, grouped, joins) {
-  const queries = []
-  const done = {}
-
-  function recurse (queries, entity) {
-    queries.push(grouped[entity])
-    done[entity] = true
-
-    if (joins[entity] && !done[joins[entity]]) {
-      return recurse(queries, joins[entity])
-    }
-
-    const reverseJoin = keys(joins).find(join => entity === joins[join] && !done[join])
-
-    if (reverseJoin) {
-      return recurse(queries, reverseJoin)
-    }
-
-    return queries
+    entities.sort((a, b) => done[a] ? -1 : 1)
   }
 
-  return recurse(queries, entry.entity)
+  return ordered
 }
 
 function compileSubQueries (tuples, binding, select) { 
   const ts = map(clear, tuples)
   const grouped = group(ts)
-  const joins = getJoins(grouped)
   const entry = getEntry(grouped, binding)
-  const groups = sortEntities(entry, grouped, joins)
-  const queries = collectQueries([], 0, false)
+  const ordered = joinOrder(grouped, entry.entity)
+  jsome(ordered)
 
+  const queries = collect(ordered, 0, [])
+  const done = {}
 
-  function collectQueries (queries, i, join) {
-    if (i === groups.length) {
-      return queries
-    }
+  function collect(group, i, queries, parent) {
+    const [entity, subordinates] = group[i]
+    const { variables } = grouped[entity]
 
-    const { entity, variables } = groups[i]
+    // STARTING QUERY
+    if (entity === entry.entity) {
+      if (entry.attribute) {
+        queries.push(entry)
 
-    if (i === 0 && entry.attribute) {
-      queries.push(entry)
+        const byEntity = {
+          entity,
+          attributes: values(variables).filter(attr => attr !== entry.attribute)
+        }
 
-      const byEntity = {
-        entity,
-        attributes: values(variables).filter(attr => attr !== entry.attribute)
+        queries.push(byEntity)
+      } else {
+        const byEntity = { entity, attributes: values(variables), condition: entry.condition }
+        queries.push(byEntity)
       }
+    } else {
 
-      queries.push(byEntity)
-      const next = i + 1
+      // JOIN FROM prior entity
+      if (variables[parent]) {
+        const byJoin = { entity, attribute: variables[parent], joinFrom: parent }
+        const vars = keys(variables)
+        queries.push(byJoin)
 
-      return collectQueries(queries, next, entity)
-    }
+        if (vars.length > 1) {
+          const byEntity = { entity, joinTo: {}, attributes: [] }
+          const children = map(g => g[0], subordinates)
 
-    if (i === 0 && !entry.attribute) {
-      const byEntity = { entity, attributes: values(variables) }
-      queries.push(byEntity)
+          for (let i = 0; i < vars.length; i++) {
+            const variable = vars[i]
 
-      return collectQueries(queries, i + 1, entity)
-    }
+            if (variable !== parent) {
+              byEntity.attributes.push(variables[variable])
 
-    if (join) {
-      const byJoin = { entity, attribute: variables[join], joinFrom: join }
-      queries.push(byJoin)
+              // variable matches a subordinate entity -> JOIN TO
+              if (contains(variable, children)) {
+                byEntity.joinTo[variables[variable]] = variable
+              }
+            }
+          }
 
-      const vars = keys(variables)
-
-      if (vars.length > 1) {
+          queries.push(byEntity)
+        }
+      } else {
         const byEntity = { entity, attributes: [], joinTo: {} }
+        const vars = keys(variables)
+        const children = map(g => g[0], subordinates)
 
         for (let i = 0; i < vars.length; i++) {
           const variable = vars[i]
 
-          if (variable !== join) {
+          if (variable !== parent) {
             byEntity.attributes.push(variables[variable])
 
-            if (joins[variable] === entity) {
+            // variable matches a subordinate entity -> JOIN TO
+            if (contains(variable, children)) {
               byEntity.joinTo[variables[variable]] = variable
             }
           }
@@ -163,37 +215,15 @@ function compileSubQueries (tuples, binding, select) {
 
         queries.push(byEntity)
       }
-
-      return collectQueries(queries, i + 1)
     }
 
-    const byEntity = { entity, attributes: [], joinTo: {} }
-    const vars = keys(variables)
-
-    for (let i = 0; i < vars.length; i++) {
-      const variable = vars[i]
-      byEntity.attributes.push(variables[variable])
-
-      if (joins[variable] === entity) {
-        byEntity.joinTo[variables[variable]] = variable
-      }
+    // recurse
+    for (let j = 0; j < subordinates.length; j++) {
+      collect(subordinates, j, queries, entity)
     }
 
-    queries.push(byEntity)
-
-    return collectQueries(queries, i + 1)
+    return queries
   }
 
-  
-
-  jsome(joins)
-  jsome(groups)
-
   return queries
-  
-
-
-
-
-
 }

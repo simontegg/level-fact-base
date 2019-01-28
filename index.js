@@ -5,7 +5,9 @@ const { all, is, contains, each, filter, keys, sort, map, path, pipe, values } =
 const Big = require('big.js')
 const jsome = require('jsome')
 
-const compileSubQueries = require('./compile-subqueries')
+const compileToElastic = require('./compile-to-elastic')
+const compileDatalog = require('./compile-datalog')
+
 const getFilter = require('./get-filter')
 const getEntityType = require('./get-entity-type')
 
@@ -97,7 +99,7 @@ module.exports = function (client, cache) {
               return callback(err)
             }
 
-            jsome(facts)
+            // jsome(facts)
 
             client.bulk({ body: facts, refresh: 'true' }, callback)
           })
@@ -107,72 +109,27 @@ module.exports = function (client, cache) {
     },
 
     _subQuery: function (query, resultsMap, callback) {
-      const { entity, type, join, timestamp } = query
+      const { entity, joinTo, filter } = query
       const latestResults = {}
-      const filter = getFilter()
 
       if (!resultsMap[entity]) {
         resultsMap[entity] = {}
       }
 
-      // fetch entities that match attribute and value
-      if (type === 'value') {
-        filter.must({ term: { 'attribute.keyword': query.attribute }})
-        filter.must({ term: { 'value.keyword': query.match }})
+      if (query.fromPrior) {
+        query.fromPrior(resultsMap, filter)
       }
 
-      if (type === 'join') {
-        filter.must({ term: { 'attribute.keyword': query.attribute }})
+      // if (is(Number, timestamp)) {
+        // filter.lte(timestamp)
+        // }
+      //
+      const body = filter.build()
 
-        const joinIds = keys(resultsMap[join] || {})
-        
-        if (joinIds.length > 0) {
-          joinIds.forEach(joinId => filter.should({ term: { 'value.keyword': joinId }}))
-        } else {
-          keys(resultsMap[entity] || {})
-            .forEach(entityId => {
-              filter.should({ term: { entity: entityId }})
-            })
-        }
-      }
-
-      if (type === 'attribute') {
-        const entityIds = keys(resultsMap[entity] || {})
-        const attributes = keys(query.attributes)
-        
-        // match facts with ANY 
-        if (entityIds.length === 0) {
-          attributes.forEach(attribute => {
-            filter.should({ term: { 'attribute.keyword': attribute } })
-          })
-        } else {
-          const entityCondition = { bool: { should: [] } }
-          const attrCondition   = { bool: { should: [] } }
-
-          entityIds.forEach(entityId => {
-            entityCondition.bool.should.push({ term: { entity: entityId } })
-          })
-          
-          attributes.forEach(attribute => {
-            attrCondition.bool.should.push({ term: { 'attribute.keyword': attribute } })
-          })
-          
-          // facts must match ANY of entities AND ANY of attributes
-          filter.must(entityCondition)
-          filter.must(attrCondition)
-        }
-      }
-
-      if (is(Number, timestamp)) {
-        filter.lte(timestamp)
-      }
+      jsome(body)
 
       return pull(
-        pull.once(filter.build()),
-        // pull.map(b => {
-          // jsome(b)
-          // return b
-        // }),
+        pull.once(body),
         pull.asyncMap((body, cb) => client.search({ index: 'facts', body }, cb)),
         pull.map(getHits),
         pull.flatten(),
@@ -193,7 +150,7 @@ module.exports = function (client, cache) {
           return false
         }),
         pull.map(fact => {
-          // jsome(fact)
+          jsome(fact)
 
           if (!resultsMap[entity][fact.entity]) {
             resultsMap[entity][fact.entity] = {}
@@ -206,21 +163,27 @@ module.exports = function (client, cache) {
             delete resultsMap[entity][fact.entity]
           }
 
-          if (join) {
+          const joinTos = keys(joinTo || {})
+
+          if (joinTos.length > 0) {
             // add entity value to resultsMap for pickup by subsequent queries
-            if (!resultsMap[join]) {
-              resultsMap[join] = {}
-            }
-            
-            if (!resultsMap[join][fact.value]) {
-              resultsMap[join][fact.value] = {}
-            }
+            for (let i = 0; i < joinTos.length; i++) {
+              const join = joinTos[i]
 
-            if (!resultsMap[join][fact.value][fact.attribute]) {
-              resultsMap[join][fact.value][fact.attribute] = {}
-            }
+              if (!resultsMap[join]) {
+                resultsMap[join] = {}
+              }
+              
+              if (!resultsMap[join][fact.value]) {
+                resultsMap[join][fact.value] = {}
+              }
 
-            resultsMap[join][fact.value][fact.attribute][fact.entity] = true
+              if (!resultsMap[join][fact.value][fact.attribute]) {
+                resultsMap[join][fact.value][fact.attribute] = {}
+              }
+
+              resultsMap[join][fact.value][fact.attribute][fact.entity] = true
+            }
           }
           
           return fact
@@ -230,22 +193,22 @@ module.exports = function (client, cache) {
     },
 
     query: function (tuples, binding, select, callback) {
-      const [queries, attrMap] = compileSubQueries(tuples, binding, select)
-
-      jsome(queries)
+      const queries = compileDatalog(tuples, binding)
       const resultsMap = {}
 
       return pull(
         pull.values(queries),
+        pull.map(compileToElastic),
         pull.asyncMap((query, cb) => this._subQuery(query, resultsMap, cb)),
         pull.collect((err, results) => {
           if (err) {
             return callback(err)
           }
 
-          // jsome(queries)
+          jsome(results)
 
-          callback(null, processResults(resultsMap, attrMap))
+          // callback(null, processResults(resultsMap, attrMap))
+          callback(null, resultsMap)
         })
       )
     }
