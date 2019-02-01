@@ -83,4 +83,34 @@ test('one-by-id-to-multplie-many', t => {
 
 })
 
+test.only('multiple condtions', t => {
+  const tuples = [
+    ['?orgId', 'org_name', '?orgName'],
+    ['?orgId', 'org_status', '?status'], 
+    ['?orgId', 'org_updatedAt', '?orgUpdatedAt'], 
+
+    ['?relId', 'relationship_objectId', '?orgId'],
+    ['?relId', 'relationship_subjectId', '?id'],
+
+    ['?olId', 'orgLocality_orgId', '?orgId'],
+    ['?olId', 'orgLocality_localityId', '?localityId'],
+
+    ['?id', 'person_name', '?name'],
+    ['?id', 'person_updatedAt', '?updatedAt']
+  ]
+
+  const binding = { orgName: 'denmark', status: 'good' }
+  const select = ['name', 'updatedAt', 'status', 'orgUpdatedAt']
+
+  const result = compileDatalog(tuples, binding, select)
+
+  console.log('queries');
+  jsome(result)
+
+  
+  t.is(true, true)
+
+
+})
+
 

@@ -71,38 +71,33 @@ const update = [
     relationship_subjectId: 'b',
     relationship_objectId: 'd',
     $retract: true
-  },
-  {
-    $e: 'd',
-    org_status: 'bad'
   }
 ]
 
-    // <, >, <=, >=, =, !=
-    // count
-    // ||
-          // ['?name'  '>=' '?n'],
-          // ['?name'   '==' ['denmark' '||' 'estonia']]
-
-test.cb('many-to-many', t => {
+test.cb('bound-past', t => {
   db.transact(entities, err => {
     const past = new Date().getTime() - 1
 
     db.transact(update, err => {
       console.log({err});
       db.query(
+
+        // fetch organisations with name 'denmark
+        // and their member_of relationships at the time the org was last updated at
+        // and the subjects of those relationships
         [
           ['?orgId', 'org_name', '?orgName'],
           ['?orgId', 'org_status', '?status'], 
           ['?orgId', 'org_updatedAt', '?orgUpdatedAt'], 
 
-          ['?relId', 'relationship_objectId', '?orgId'],
-          ['?relId', 'relationship_subjectId', '?id'],
+          ['?relId', 'relationship_objectId', '?orgId', '?orgUpdatedAt'],
+          ['?relId', 'relationship_subjectId', '?id', '?orgUpdatedAt'],
+          ['?relId', 'relationship_type', '?type', '?orgUpdatedAt'],
 
           ['?id', 'person_name', '?name'],
           ['?id', 'person_updatedAt', '?updatedAt']
         ],
-        { orgName: 'denmark', status: 'bad' },
+        { orgName: 'denmark', type: 'member_of' },
         ['status', 'name', 'id'],
         (err, results) => {
           console.log({err});

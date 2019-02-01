@@ -32,10 +32,6 @@ const getSorted = pipe(values, sort((a, b) => b.score - a.score))
 const getHits = path('hits.hits')
 const allRemoved = pipe(values, all(v => v === undefined))
 
-// const getEntityType = pipe(
-  // split
-// )
-
 module.exports = function (client, cache) {
   return {
     transact: function (entities, callback) {
@@ -126,8 +122,6 @@ module.exports = function (client, cache) {
       //
       const body = filter.build()
 
-      jsome(body)
-
       return pull(
         pull.once(body),
         pull.asyncMap((body, cb) => client.search({ index: 'facts', body }, cb)),
@@ -150,8 +144,6 @@ module.exports = function (client, cache) {
           return false
         }),
         pull.map(fact => {
-          jsome(fact)
-
           if (!resultsMap[entity][fact.entity]) {
             resultsMap[entity][fact.entity] = {}
           }
@@ -168,21 +160,26 @@ module.exports = function (client, cache) {
           if (joinTos.length > 0) {
             // add entity value to resultsMap for pickup by subsequent queries
             for (let i = 0; i < joinTos.length; i++) {
-              const join = joinTos[i]
+              const joinAttr = joinTos[i]
 
-              if (!resultsMap[join]) {
-                resultsMap[join] = {}
-              }
-              
-              if (!resultsMap[join][fact.value]) {
-                resultsMap[join][fact.value] = {}
+              if (joinAttr === fact.attribute) {
+                const join = joinTo[joinAttr]
+
+                if (!resultsMap[join]) {
+                  resultsMap[join] = {}
+                }
+                
+                if (!resultsMap[join][fact.value]) {
+                  resultsMap[join][fact.value] = {}
+                }
+
+                if (!resultsMap[join][fact.value][fact.attribute]) {
+                  resultsMap[join][fact.value][fact.attribute] = {}
+                }
+
+                resultsMap[join][fact.value][fact.attribute][fact.entity] = true
               }
 
-              if (!resultsMap[join][fact.value][fact.attribute]) {
-                resultsMap[join][fact.value][fact.attribute] = {}
-              }
-
-              resultsMap[join][fact.value][fact.attribute][fact.entity] = true
             }
           }
           
@@ -195,6 +192,8 @@ module.exports = function (client, cache) {
     query: function (tuples, binding, select, callback) {
       const queries = compileDatalog(tuples, binding)
       const resultsMap = {}
+
+      jsome(queries)
 
       return pull(
         pull.values(queries),

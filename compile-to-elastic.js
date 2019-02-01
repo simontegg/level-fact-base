@@ -6,12 +6,16 @@ const noop = () => {}
 module.exports = function compileToElastic (q) {
   const filter = getFilter()
   let fromPrior
-
+  let runAfterEach
 
   // value search
   if (q.condition && !is(Object, q.condition) && q.attribute) {
     filter.must({ term: { 'attribute.keyword': q.attribute }})
     filter.must({ term: { 'value.keyword': q.condition }})
+  }
+
+  if (q.conditions) {
+
   }
 
   // entity search
@@ -30,16 +34,24 @@ module.exports = function compileToElastic (q) {
     }
   }
 
-  if (!q.joinFrom && !q.condition) {
-    fromPrior = (resultsMap, filter) => {
-      keys(resultsMap[q.entity] || {})
-        .forEach(entity => filter.should({ term: { entity } }))
-    }
-  }
-
   // general existing entity attributes search
-  if (!q.condition && q.attributes) {
-    q.attributes.forEach(attr => filter.should({ term: { 'attribute.keyword': attr } }))
+  if (!q.joinFrom && !q.condition) {
+    const attributeCondition = { bool: { should: [] } }
+    q.attributes.forEach(attr => {
+      attributeCondition.bool.should.push({ term: { 'attribute.keyword': attr } })
+    })
+
+    filter.must(attributeCondition)
+
+    fromPrior = (resultsMap, filter) => {
+      const entityIds = keys(resultsMap[q.entity] || {})
+      
+      if (entityIds.length > 0) {
+        const entityCondition = { bool: { should: [] } }
+        entityIds.forEach(entity => entityCondition.bool.should.push({ term: { entity } }))
+        filter.must(entityCondition)
+      }
+    }
   }
 
   q.filter = filter

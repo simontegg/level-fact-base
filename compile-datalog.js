@@ -144,6 +144,7 @@ function compileSubQueries (tuples, binding, select) {
   const grouped = group(ts)
   const entry = getEntry(grouped, binding)
   const ordered = joinOrder(grouped, entry.entity)
+  const boundVariables = keys(binding)
   jsome(ordered)
 
   const queries = collect(ordered, 0, [])
@@ -153,51 +154,35 @@ function compileSubQueries (tuples, binding, select) {
     const [entity, subordinates] = group[i]
     const { variables } = grouped[entity]
 
-    // STARTING QUERY
-    if (entity === entry.entity) {
-      if (entry.attribute) {
-        queries.push(entry)
+    for (let i = 0; i < boundVariables.length; i++) {
+      const boundVariable = boundVariables[i]
 
-        const byEntity = {
-          entity,
-          attributes: values(variables).filter(attr => attr !== entry.attribute)
+      if (variables[boundVariable]) {
+        const byValue = {
+          entity, 
+          attribute: variables[boundVariable], 
+          condition: binding[boundVariable] 
         }
-
-        queries.push(byEntity)
-      } else {
-        const byEntity = { entity, attributes: values(variables), condition: entry.condition }
-        queries.push(byEntity)
+        
+        // perform separate searches for each attribute:value combination
+        // limit subsequent queries by existing entities in resultsMap
+        queries.push(byValue)
       }
-    } else {
+    }
 
-      // JOIN FROM prior entity
-      if (variables[parent]) {
-        const byJoin = { entity, attribute: variables[parent], joinFrom: parent }
-        const vars = keys(variables)
-        queries.push(byJoin)
+    if (binding[entity]) {
+      const byEntity = { entity, attributes: values(variables), condition: binding[entity] }
+      queries.push(byEntity)
+    }
 
-        if (vars.length > 1) {
-          const byEntity = { entity, joinTo: {}, attributes: [] }
-          const children = map(g => g[0], subordinates)
+    // JOIN FROM prior entity
+    if (variables[parent]) {
+      const byJoin = { entity, attribute: variables[parent], joinFrom: parent }
+      const vars = keys(variables)
+      queries.push(byJoin)
 
-          for (let i = 0; i < vars.length; i++) {
-            const variable = vars[i]
-
-            if (variable !== parent) {
-              byEntity.attributes.push(variables[variable])
-
-              // variable matches a subordinate entity -> JOIN TO
-              if (contains(variable, children)) {
-                byEntity.joinTo[variables[variable]] = variable
-              }
-            }
-          }
-
-          queries.push(byEntity)
-        }
-      } else {
-        const byEntity = { entity, attributes: [], joinTo: {} }
-        const vars = keys(variables)
+      if (vars.length > 1) {
+        const byEntity = { entity, joinTo: {}, attributes: [] }
         const children = map(g => g[0], subordinates)
 
         for (let i = 0; i < vars.length; i++) {
@@ -208,6 +193,10 @@ function compileSubQueries (tuples, binding, select) {
 
             // variable matches a subordinate entity -> JOIN TO
             if (contains(variable, children)) {
+              if (!byEntity.joinTo) {
+                byEntity.joinTo = {}
+              }
+
               byEntity.joinTo[variables[variable]] = variable
             }
           }
@@ -215,6 +204,32 @@ function compileSubQueries (tuples, binding, select) {
 
         queries.push(byEntity)
       }
+    }
+
+    // GENERAL search from prior entity
+    if (!variables[parent] && entity !== entry.entity) {
+      const byEntity = { entity, attributes: [] }
+      const vars = keys(variables)
+      const children = map(g => g[0], subordinates)
+
+      for (let i = 0; i < vars.length; i++) {
+        const variable = vars[i]
+
+        if (variable !== parent) {
+          byEntity.attributes.push(variables[variable])
+
+          // variable matches a subordinate entity -> JOIN TO
+          if (contains(variable, children)) {
+            if (!byEntity.joinTo) {
+              byEntity.joinTo = {}
+            }
+
+            byEntity.joinTo[variables[variable]] = variable
+          }
+        }
+      }
+
+      queries.push(byEntity)
     }
 
     // recurse
