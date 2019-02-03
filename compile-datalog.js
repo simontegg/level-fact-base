@@ -102,12 +102,12 @@ function joinOrder (grouped, start) {
 
         if (timestamp) {
           keys(grouped).forEach(e => {
-            if (!done[entity] && e !== entity) {
+            if (e !== entity) {
               keys(grouped[e].variables).forEach(v => {
                 if (timestamp === v) {
                   traverse(ordered).forEach(function (x) {
                     if (!done[x] && x == e) { 
-                      done[entity] = true
+                      done[e] = true
 
                       let path = this.path.slice(0)
                       path.splice(this.path.length - 1, 1, '1')
@@ -115,8 +115,10 @@ function joinOrder (grouped, start) {
                       const subordinates = traverse(ordered).get(path)
                       const update = subordinates.slice(0)
 
-                      update.push([entity, []])
-                      traverse(ordered).set(path, update)
+                      if (update.length > 0 && update[0].length > 0 && update[0][0] !== entity) {
+                        update.push([entity, []])
+                        traverse(ordered).set(path, update)
+                      }
                     }
                   })
                 }
@@ -140,6 +142,7 @@ function joinOrder (grouped, start) {
 
                 const subordinates = traverse(ordered).get(path)
                 const update = subordinates.slice(0)
+
                 update.push([entity, []])
                 traverse(ordered).set(path, update)
               }
@@ -191,10 +194,14 @@ function compileSubQueries (tuples, binding, select) {
     let lte
 
     if (timestamp) {
-      keys(grouped[parent].variables).some(v => {
-        if (v === timestamp) {
-          lte = { [parent]: grouped[parent].variables[v] }
-          return true
+      keys(grouped).some(e => {
+        if (e !== entity) {
+          return keys(grouped[e].variables).some(v => {
+            if (v === timestamp) {
+              lte = { entity: e, variable: grouped[e].variables[v] }
+              return true
+            }
+          })
         }
       })
 

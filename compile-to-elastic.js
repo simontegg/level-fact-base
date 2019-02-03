@@ -7,6 +7,23 @@ const noop = () => {}
 module.exports = function compileToElastic (q) {
   const filter = getFilter()
   let fromPrior
+  let getTimestamp
+
+  if (is(Number, q.lte)) {
+    filter.lte(q.lte)
+  }
+
+  if (is(Object, q.lte)) {
+    getTimestamp = resultsMap => {
+      const { entity, variable } = q.lte
+
+      // only works if there is a single entity
+      const entityId = keys(resultsMap[entity])[0]
+      const date = resultsMap[entity][entityId][variable]
+      return is(String, date) ? new Date(date).getTime() : date
+    }
+  }
+
 
 
   // value search
@@ -18,6 +35,10 @@ module.exports = function compileToElastic (q) {
     fromPrior = (resultsMap, filter) => {
       keys(resultsMap[q.entity] || {})
         .forEach(prior => filter.should({ term: { entity: prior } }))
+
+      if (getTimestamp) {
+        filter.lte(getTimestamp(resultsMap))
+      }
     }
   }
 
@@ -34,6 +55,10 @@ module.exports = function compileToElastic (q) {
     fromPrior = (resultsMap, filter) => {
       keys(resultsMap[q.joinFrom] || {})
         .forEach(join => filter.should({ term: { 'value.keyword': join } }))
+      
+      if (getTimestamp) {
+        filter.lte(getTimestamp(resultsMap))
+      }
     }
   }
 
@@ -54,19 +79,15 @@ module.exports = function compileToElastic (q) {
         entityIds.forEach(entity => entityCondition.bool.should.push({ term: { entity } }))
         filter.must(entityCondition)
       }
+      
+      if (getTimestamp) {
+        filter.lte(getTimestamp(resultsMap))
+      }
     }
   }
 
-  if (q.atTimestamp) {
-    const timestamps = keys(q.atTimestamp)
-    console.log(q.atTimestamp);
-    jsome(filter.build());
-
-    for (let i = 0; i < timestamps.length; i++) {
-
-    }
-
-
+  if (getTimestamp && !fromPrior) {
+    fromPrior = (resultsMap, filter) => filter.lte(getTimestamp(resultsMap))
   }
 
   q.filter = filter

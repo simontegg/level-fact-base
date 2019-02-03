@@ -94,8 +94,8 @@ test.cb('bound-past', t => {
           ['?relId', 'relationship_subjectId', '?id', '?orgUpdatedAt'],
           ['?relId', 'relationship_type', '?type', '?orgUpdatedAt'],
 
-          ['?id', 'person_name', '?name'],
-          ['?id', 'person_updatedAt', '?updatedAt']
+          ['?id', 'person_name', '?name', '?orgUpdatedAt'],
+          ['?id', 'person_updatedAt', '?updatedAt', '?orgUpdatedAt']
         ],
         { orgName: 'denmark', type: 'member_of' },
         ['status', 'name', 'id'],
