@@ -80,10 +80,9 @@ test('one-by-id-to-multplie-many', t => {
 
   
   t.is(true, true)
-
 })
 
-test.only('multiple condtions', t => {
+test('multiple condtions', t => {
   const tuples = [
     ['?orgId', 'org_name', '?orgName'],
     ['?orgId', 'org_status', '?status'], 
@@ -109,8 +108,43 @@ test.only('multiple condtions', t => {
 
   
   t.is(true, true)
-
-
 })
 
+test.only('cross-bound-timestamps', t => {
+  const tuples = [
+    ['?orgId',  'org_name',         '?orgName'],
+    ['?orgId',  'org_status',       '?status'],
+    ['?orgId',  'org_updatedAt',    '?orgUpdatedAt'], 
+
+    ['?id',     'person_name',      '?name',        '?orgUpdatedAt'],
+    ['?id',     'person_updatedAt', '?updatedAt',   '?orgUpdatedAt']
+  ]
+
+  const binding = { orgName: 'denmark' }
+  const select = ['name', 'updatedAt', 'status', 'orgUpdatedAt']
+
+  const result = compileDatalog(tuples, binding, select)
+
+  jsome(result)
+
+  
+  t.is(true, true)
+})
+
+test('bound-timestamps', t => {
+  const tuples = [
+    ['?id',     'person_name',      '?name',        '?past'],
+    ['?id',     'person_updatedAt', '?updatedAt',   '?past']
+  ]
+
+  const binding = { name: 'denmark', past: 12344949995 }
+  const select = ['name', 'updatedAt']
+
+  const result = compileDatalog(tuples, binding, select)
+
+  jsome(result)
+
+  
+  t.is(true, true)
+})
 

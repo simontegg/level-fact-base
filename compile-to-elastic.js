@@ -1,21 +1,24 @@
 const { all, append, is, concat, contains, each, equals, filter, find, groupBy, keys, sort, map, path, pipe, reduce, values } = require('rambda')
 const getFilter = require('./get-filter')
+const jsome = require('jsome')
 
 const noop = () => {}
 
 module.exports = function compileToElastic (q) {
   const filter = getFilter()
   let fromPrior
-  let runAfterEach
+
 
   // value search
   if (q.condition && !is(Object, q.condition) && q.attribute) {
     filter.must({ term: { 'attribute.keyword': q.attribute }})
     filter.must({ term: { 'value.keyword': q.condition }})
-  }
 
-  if (q.conditions) {
-
+    // AND logic from prior conditions 
+    fromPrior = (resultsMap, filter) => {
+      keys(resultsMap[q.entity] || {})
+        .forEach(prior => filter.should({ term: { entity: prior } }))
+    }
   }
 
   // entity search
@@ -52,6 +55,18 @@ module.exports = function compileToElastic (q) {
         filter.must(entityCondition)
       }
     }
+  }
+
+  if (q.atTimestamp) {
+    const timestamps = keys(q.atTimestamp)
+    console.log(q.atTimestamp);
+    jsome(filter.build());
+
+    for (let i = 0; i < timestamps.length; i++) {
+
+    }
+
+
   }
 
   q.filter = filter

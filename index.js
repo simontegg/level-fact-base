@@ -182,6 +182,11 @@ module.exports = function (client, cache) {
 
             }
           }
+
+          if (query.runAfterEach) {
+            console.log('runAfterEach');
+            query.runAfterEach(resultsMap)
+          }
           
           return fact
         }),

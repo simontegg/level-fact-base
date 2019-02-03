@@ -28,6 +28,7 @@ function clear (tuple) {
     tuple[0].replace('?', ''),
     tuple[1],
     tuple[2].replace('?', ''),
+    tuple[3] ? tuple[3].replace('?', '') : undefined
   ]
 }
 
@@ -64,13 +65,17 @@ function group (tuples) {
   const grouped = {}
 
   for (let i = 0; i < tuples.length; i++) {
-    const [entity, attribute, variable] = tuples[i]
+    const [entity, attribute, variable, timestamp] = tuples[i]
     if (!grouped[entity]) {
       grouped[entity] = { entity, tuples: [], variables: {} }
     }
       
     grouped[entity].tuples.push(tuples[i])
-    grouped[entity].variables[tuples[i][2]] = tuples[i][1]
+    grouped[entity].variables[variable] = attribute
+
+    if (timestamp) {
+      grouped[entity].timestamp = timestamp
+    }
   }
 
   return grouped
@@ -82,6 +87,8 @@ function joinOrder (grouped, start) {
   const done = {}
   const entities = keys(grouped).sort((a, b) => a === start ? -1 : 1)
 
+  jsome(grouped)
+
   while (entities.length > 0) {
     const from = entities.shift()
 
@@ -91,10 +98,37 @@ function joinOrder (grouped, start) {
       // ignore own variables
       if (entity !== from) {
 
-        // iterate through an entity's variables
+        const { timestamp } = grouped[entity]
+
+        if (timestamp) {
+          keys(grouped).forEach(e => {
+            if (!done[entity] && e !== entity) {
+              keys(grouped[e].variables).forEach(v => {
+                if (timestamp === v) {
+                  traverse(ordered).forEach(function (x) {
+                    if (!done[x] && x == e) { 
+                      done[entity] = true
+
+                      let path = this.path.slice(0)
+                      path.splice(this.path.length - 1, 1, '1')
+
+                      const subordinates = traverse(ordered).get(path)
+                      const update = subordinates.slice(0)
+
+                      update.push([entity, []])
+                      traverse(ordered).set(path, update)
+                    }
+                  })
+                }
+              })
+            }
+          })
+        }
+
+        // iterate through other entity's variables
         keys(grouped[entity].variables).forEach(variable => {
 
-          // variable is an entity
+          // child variable == entity 
           if (!done[entity] && from === variable) {
             traverse(ordered).forEach(function (x) {
               // prior entity exists in ordered results
@@ -112,7 +146,7 @@ function joinOrder (grouped, start) {
             })
           }
 
-          // 
+          // child variable is entity
           if (!done[variable] && grouped[variable]) {
             traverse(ordered).forEach(function (x) {
               if (!done[x] && x === entity) {
@@ -147,21 +181,52 @@ function compileSubQueries (tuples, binding, select) {
   const boundVariables = keys(binding)
   jsome(ordered)
 
-  const queries = collect(ordered, 0, [])
   const done = {}
+  const queries = collect(ordered, 0, [])
 
   function collect(group, i, queries, parent) {
     const [entity, subordinates] = group[i]
-    const { variables } = grouped[entity]
+    const { variables, timestamp } = grouped[entity]
+    const vars = keys(variables)
+    let lte
 
+    if (timestamp) {
+      keys(grouped[parent].variables).some(v => {
+        if (v === timestamp) {
+          lte = { [parent]: grouped[parent].variables[v] }
+          return true
+        }
+      })
+
+      if (binding[timestamp]) {
+        lte = binding[timestamp]
+      }
+    }
+    
+    // entity by id
+    if (binding[entity]) {
+      const byEntity = { entity, attributes: values(variables), condition: binding[entity], lte }
+      queries.push(byEntity)
+    }
+    
+    // JOIN FROM prior entity
+    if (variables[parent]) {
+      const attr = variables[parent]
+      const byJoin = { entity, attribute: attr, joinFrom: parent, lte }
+      queries.push(byJoin)
+    }
+
+    // entity by value
     for (let i = 0; i < boundVariables.length; i++) {
       const boundVariable = boundVariables[i]
+      const attr = variables[boundVariable]
 
-      if (variables[boundVariable]) {
+      if (attr) {
         const byValue = {
           entity, 
-          attribute: variables[boundVariable], 
-          condition: binding[boundVariable] 
+          attribute: attr, 
+          condition: binding[boundVariable],
+          lte
         }
         
         // perform separate searches for each attribute:value combination
@@ -170,53 +235,17 @@ function compileSubQueries (tuples, binding, select) {
       }
     }
 
-    if (binding[entity]) {
-      const byEntity = { entity, attributes: values(variables), condition: binding[entity] }
-      queries.push(byEntity)
-    }
-
-    // JOIN FROM prior entity
-    if (variables[parent]) {
-      const byJoin = { entity, attribute: variables[parent], joinFrom: parent }
-      const vars = keys(variables)
-      queries.push(byJoin)
-
-      if (vars.length > 1) {
-        const byEntity = { entity, joinTo: {}, attributes: [] }
-        const children = map(g => g[0], subordinates)
-
-        for (let i = 0; i < vars.length; i++) {
-          const variable = vars[i]
-
-          if (variable !== parent) {
-            byEntity.attributes.push(variables[variable])
-
-            // variable matches a subordinate entity -> JOIN TO
-            if (contains(variable, children)) {
-              if (!byEntity.joinTo) {
-                byEntity.joinTo = {}
-              }
-
-              byEntity.joinTo[variables[variable]] = variable
-            }
-          }
-        }
-
-        queries.push(byEntity)
-      }
-    }
-
     // GENERAL search from prior entity
-    if (!variables[parent] && entity !== entry.entity) {
-      const byEntity = { entity, attributes: [] }
-      const vars = keys(variables)
+    if (!binding[entity] && vars.length > 0) {
+      const byEntity = { entity, attributes: [], lte }
       const children = map(g => g[0], subordinates)
 
       for (let i = 0; i < vars.length; i++) {
         const variable = vars[i]
 
-        if (variable !== parent) {
-          byEntity.attributes.push(variables[variable])
+        if (variable !== parent && !binding[variable]) {
+          const attr = variables[variable]
+          byEntity.attributes.push(attr)
 
           // variable matches a subordinate entity -> JOIN TO
           if (contains(variable, children)) {
